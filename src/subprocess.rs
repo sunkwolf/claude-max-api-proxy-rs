@@ -30,7 +30,7 @@ pub struct SubprocessOptions {
     pub api: &'static str, // "openai" or "anthropic"
 }
 
-fn build_args(prompt: &str, options: &SubprocessOptions) -> Vec<String> {
+fn build_args(options: &SubprocessOptions) -> Vec<String> {
     let mut args = vec![
         "--print".to_string(),
         "--output-format".to_string(),
@@ -40,9 +40,7 @@ fn build_args(prompt: &str, options: &SubprocessOptions) -> Vec<String> {
         "--model".to_string(),
         options.model.clone(),
         "--no-session-persistence".to_string(),
-        "--permission-mode".to_string(),
-        "bypassPermissions".to_string(),
-        prompt.to_string(),
+        "-".to_string(), // read prompt from stdin
     ];
 
     if let Some(ref session_id) = options.session_id {
@@ -62,7 +60,7 @@ pub async fn spawn_subprocess(
     options: SubprocessOptions,
     tx: mpsc::Sender<SubprocessEvent>,
 ) {
-    let args = build_args(&prompt, &options);
+    let args = build_args(&options);
     let start = Instant::now();
     let rid = &options.request_id;
     let api = options.api;
@@ -74,7 +72,7 @@ pub async fn spawn_subprocess(
         .args(&args)
         .current_dir(&options.cwd)
         .env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1")
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -95,6 +93,24 @@ pub async fn spawn_subprocess(
 
     let pid = child.id().unwrap_or(0);
     info!("[req={rid}][pid={pid}] Subprocess started");
+
+    // Write prompt to stdin, then close it so the CLI knows input is complete.
+    // This avoids passing the prompt as a CLI argument, which breaks on special
+    // characters and hits OS argument-length limits on long prompts.
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
+            error!("[req={rid}][pid={pid}] Failed to write prompt to stdin: {e}");
+            let _ = child.kill().await;
+            let _ = tx
+                .send(SubprocessEvent::Error(format!(
+                    "stdin write failed: {e}"
+                )))
+                .await;
+            return;
+        }
+        drop(stdin);
+    }
 
     let stdout = child.stdout.take().expect("stdout not captured");
     let stderr = child.stderr.take().expect("stderr not captured");
@@ -252,26 +268,19 @@ fn process_cli_message(msg: ClaudeCliMessage) -> Vec<SubprocessEvent> {
                 events.push(SubprocessEvent::Model(model.clone()));
             }
 
-            // Check for inline content (non-streaming assistant messages)
-            if let Some(AssistantInner {
-                content: Some(blocks),
-                ..
-            }) = &assistant_msg.message
-            {
-                for block in blocks {
-                    if let Some(text) = &block.text {
-                        if !text.is_empty() {
-                            events.push(SubprocessEvent::ContentDelta(text.clone()));
-                        }
-                    }
-                }
-            }
+            // NOTE: Do NOT emit ContentDelta from assistant message content blocks.
+            // When --include-partial-messages is used, the CLI sends both:
+            //   1. assistant messages with accumulated content (the full text so far)
+            //   2. content_block_delta stream events with incremental text
+            // Emitting from both sources causes every response to be doubled.
+            // The streaming deltas (handled by process_stream_event) are sufficient.
 
             events
         }
         ClaudeCliMessage::Result(result) => {
             vec![SubprocessEvent::Result(result)]
         }
+        ClaudeCliMessage::StreamEventWrapper(envelope) => process_stream_event(envelope.event),
     }
 }
 
@@ -304,15 +313,13 @@ mod tests {
             cwd: "/tmp".to_string(),
             api: "anthropic",
         };
-        let args = build_args("Hello world", &options);
+        let args = build_args(&options);
         assert!(args.contains(&"--print".to_string()));
         assert!(args.contains(&"--output-format".to_string()));
         assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"--model".to_string()));
         assert!(args.contains(&"opus".to_string()));
-        assert!(args.contains(&"--permission-mode".to_string()));
-        assert!(args.contains(&"bypassPermissions".to_string()));
-        assert!(args.contains(&"Hello world".to_string()));
+        assert!(args.contains(&"-".to_string()));
         assert!(!args.contains(&"--session-id".to_string()));
     }
 
@@ -325,7 +332,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             api: "openai",
         };
-        let args = build_args("test", &options);
+        let args = build_args(&options);
         assert!(args.contains(&"--session-id".to_string()));
         assert!(args.contains(&"sess-123".to_string()));
     }
@@ -351,17 +358,16 @@ mod tests {
     }
 
     #[test]
-    fn process_line_assistant_with_content() {
+    fn process_line_assistant_with_content_skips_inline_text() {
+        // Assistant messages with inline content should NOT emit ContentDelta.
+        // The streaming content_block_delta events deliver the same text, and
+        // emitting from both sources causes every response to be doubled.
         let line = r#"{"type":"assistant","message":{"model":"claude-sonnet-4","content":[{"type":"text","text":"Hello"}]}}"#;
         let events = process_line(line).unwrap();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 1);
         match &events[0] {
             SubprocessEvent::Model(m) => assert_eq!(m, "claude-sonnet-4"),
             other => panic!("Expected Model, got {:?}", other),
-        }
-        match &events[1] {
-            SubprocessEvent::ContentDelta(t) => assert_eq!(t, "Hello"),
-            other => panic!("Expected ContentDelta, got {:?}", other),
         }
     }
 

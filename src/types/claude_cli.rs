@@ -16,6 +16,18 @@ pub enum ClaudeCliMessage {
 
     #[serde(rename = "result")]
     Result(ResultMessage),
+
+    /// Stream events wrapped in a top-level envelope.
+    /// The CLI emits these as `{"type":"stream_event","event":{...}}` when
+    /// using `--include-partial-messages`.
+    #[serde(rename = "stream_event")]
+    StreamEventWrapper(StreamEventEnvelope),
+}
+
+/// Envelope for stream events emitted as top-level NDJSON lines.
+#[derive(Debug, Deserialize)]
+pub struct StreamEventEnvelope {
+    pub event: StreamEvent,
 }
 
 /// A streaming event within the assistant message flow.
