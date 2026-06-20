@@ -65,6 +65,10 @@ async fn main() {
     let session_manager = session::SessionManager::new();
     session_manager.spawn_cleanup_task();
 
+    // Nota: el tope de concurrencia NO vive aquí a propósito. Decisión de Fer
+    // (20-jun): el proxy es infra compartida con gbrain; si limitara aquí y un
+    // cliente (Yomi) lo saturara, gbrain se quedaría sin slots. El tope se aplica
+    // en cada cliente (Yomi tiene su propio semáforo `max_concurrent`).
     let state = server::AppState {
         cwd: cwd.clone(),
         session_manager,

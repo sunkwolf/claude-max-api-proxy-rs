@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::http::header;
+use axum::http::{header, HeaderMap};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -27,6 +27,17 @@ fn generate_request_id() -> String {
         .chars()
         .take(8)
         .collect()
+}
+
+/// Lee el reasoning effort del header `x-claude-effort` (si el cliente lo manda).
+/// Retrocompatible: clientes sin el header (gbrain) → `None` → el subprocess no
+/// recibe `--effort`. La validación del valor concreto vive en `build_args`.
+fn extract_effort(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-claude-effort")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
 }
 
 pub async fn health() -> impl IntoResponse {
@@ -80,6 +91,7 @@ pub async fn models() -> impl IntoResponse {
 
 pub async fn chat_completions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
     // Validate messages
@@ -94,10 +106,11 @@ pub async fn chat_completions(
 
     let request_id = generate_request_id();
     let is_streaming = request.stream;
+    let effort = extract_effort(&headers);
 
     let (model, prompt, session_id) = openai_to_cli::openai_to_cli(&request);
 
-    info!("[req={request_id}] OpenAI chat completions model={model} streaming={is_streaming}");
+    info!("[req={request_id}] OpenAI chat completions model={model} streaming={is_streaming} effort={effort:?}");
 
     let options = SubprocessOptions {
         request_id: request_id.clone(),
@@ -105,6 +118,7 @@ pub async fn chat_completions(
         session_id,
         cwd: state.cwd.clone(),
         api: "openai",
+        effort,
     };
 
     if is_streaming {
@@ -291,6 +305,7 @@ async fn handle_streaming(
 
 pub async fn messages(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<MessagesRequest>,
 ) -> Result<Response, AppError> {
     if request.messages.is_empty() {
@@ -301,10 +316,11 @@ pub async fn messages(
 
     let request_id = generate_request_id();
     let is_streaming = request.stream;
+    let effort = extract_effort(&headers);
 
     let (model, prompt, session_id) = anthropic_to_cli::anthropic_to_cli(&request);
 
-    info!("[req={request_id}] Anthropic messages model={model} streaming={is_streaming}");
+    info!("[req={request_id}] Anthropic messages model={model} streaming={is_streaming} effort={effort:?}");
 
     let options = SubprocessOptions {
         request_id: request_id.clone(),
@@ -312,13 +328,15 @@ pub async fn messages(
         session_id,
         cwd: state.cwd.clone(),
         api: "anthropic",
+        effort,
     };
 
     if is_streaming {
         handle_messages_streaming(request_id, prompt, options).await
     } else {
         let start = Instant::now();
-        let result = handle_messages_non_streaming(request_id.clone(), prompt, options).await;
+        let result =
+            handle_messages_non_streaming(request_id.clone(), prompt, options).await;
         let elapsed = start.elapsed().as_secs_f64();
         match &result {
             Ok(_) => info!("[req={request_id}] Request complete after {elapsed:.2}s"),

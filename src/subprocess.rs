@@ -28,7 +28,16 @@ pub struct SubprocessOptions {
     pub session_id: Option<String>,
     pub cwd: String,
     pub api: &'static str, // "openai" or "anthropic"
+    /// Reasoning effort para el CLI (`--effort`). `None` = no se pasa el flag
+    /// (comportamiento por defecto del CLI). Lo setea el handler desde el header
+    /// `x-claude-effort`. Retrocompatible: clientes que no lo mandan (gbrain)
+    /// se comportan igual que antes.
+    pub effort: Option<String>,
 }
+
+/// Valores de effort aceptados por el CLI. Filtramos para no inyectar un flag
+/// inválido si un cliente manda basura en el header.
+const VALID_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 fn build_args(options: &SubprocessOptions) -> Vec<String> {
     let mut args = vec![
@@ -42,6 +51,13 @@ fn build_args(options: &SubprocessOptions) -> Vec<String> {
         "--no-session-persistence".to_string(),
         "-".to_string(), // read prompt from stdin
     ];
+
+    if let Some(ref effort) = options.effort {
+        if VALID_EFFORTS.contains(&effort.as_str()) {
+            args.push("--effort".to_string());
+            args.push(effort.clone());
+        }
+    }
 
     if let Some(ref session_id) = options.session_id {
         args.push("--session-id".to_string());
@@ -312,6 +328,7 @@ mod tests {
             session_id: None,
             cwd: "/tmp".to_string(),
             api: "anthropic",
+            effort: None,
         };
         let args = build_args(&options);
         assert!(args.contains(&"--print".to_string()));
@@ -321,6 +338,8 @@ mod tests {
         assert!(args.contains(&"opus".to_string()));
         assert!(args.contains(&"-".to_string()));
         assert!(!args.contains(&"--session-id".to_string()));
+        // Sin effort → no se pasa el flag (retrocompat con clientes como gbrain).
+        assert!(!args.contains(&"--effort".to_string()));
     }
 
     #[test]
@@ -331,10 +350,41 @@ mod tests {
             session_id: Some("sess-123".to_string()),
             cwd: "/tmp".to_string(),
             api: "openai",
+            effort: None,
         };
         let args = build_args(&options);
         assert!(args.contains(&"--session-id".to_string()));
         assert!(args.contains(&"sess-123".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_valid_effort() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "opus".to_string(),
+            session_id: None,
+            cwd: "/tmp".to_string(),
+            api: "anthropic",
+            effort: Some("high".to_string()),
+        };
+        let args = build_args(&options);
+        assert!(args.contains(&"--effort".to_string()));
+        assert!(args.contains(&"high".to_string()));
+    }
+
+    #[test]
+    fn build_args_rejects_invalid_effort() {
+        let options = SubprocessOptions {
+            request_id: "abc".to_string(),
+            model: "opus".to_string(),
+            session_id: None,
+            cwd: "/tmp".to_string(),
+            api: "anthropic",
+            effort: Some("turbo".to_string()), // no está en VALID_EFFORTS
+        };
+        let args = build_args(&options);
+        assert!(!args.contains(&"--effort".to_string()));
+        assert!(!args.contains(&"turbo".to_string()));
     }
 
     // ── process_line ──────────────────────────────────────────
