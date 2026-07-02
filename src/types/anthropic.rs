@@ -52,6 +52,10 @@ pub struct MessagesResponse {
     pub model: String,
     pub stop_reason: String,
     pub stop_sequence: Option<String>,
+    /// Non-standard extra: number of CLI turns (agentic tool loops) the request
+    /// took. Yomi uses it as a truncation/health signal. Real Anthropic responses
+    /// don't carry this field, so genuine Anthropic clients simply ignore it.
+    pub num_turns: u64,
     pub usage: ResponseUsage,
 }
 
@@ -267,6 +271,7 @@ mod tests {
             model: "claude-sonnet-4".to_string(),
             stop_reason: "end_turn".to_string(),
             stop_sequence: None,
+            num_turns: 2,
             usage: ResponseUsage {
                 input_tokens: 10,
                 output_tokens: 5,
@@ -279,6 +284,7 @@ mod tests {
         assert_eq!(json["content"][0]["type"], "text");
         assert_eq!(json["content"][0]["text"], "Hello");
         assert_eq!(json["stop_reason"], "end_turn");
+        assert_eq!(json["num_turns"], 2);
         assert_eq!(json["usage"]["input_tokens"], 10);
     }
 

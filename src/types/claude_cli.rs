@@ -95,16 +95,31 @@ pub struct ResultMessage {
     pub duration_ms: Option<u64>,
     pub duration_api_ms: Option<u64>,
     pub num_turns: Option<u64>,
+    /// Real stop reason from the CLI envelope (e.g. "end_turn", "max_tokens").
+    /// Absent on older CLIs → falls back to "end_turn" downstream.
+    pub stop_reason: Option<String>,
     #[serde(rename = "modelUsage")]
     pub model_usage: Option<HashMap<String, ModelUsage>>,
 }
 
+/// Per-model usage as emitted inside the CLI's `modelUsage` map.
+///
+/// The CLI serializes these keys in **camelCase** (`inputTokens`, `outputTokens`,
+/// `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD`). Without the
+/// explicit `#[serde(rename)]` below every field deserialized to `None`, which is
+/// why usage reached callers as 0.
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct ModelUsage {
+    #[serde(rename = "inputTokens")]
     pub input_tokens: Option<u64>,
+    #[serde(rename = "outputTokens")]
     pub output_tokens: Option<u64>,
-    pub cache_read_tokens: Option<u64>,
-    pub cache_write_tokens: Option<u64>,
+    #[serde(rename = "cacheReadInputTokens")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(rename = "cacheCreationInputTokens")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(rename = "costUSD")]
+    pub cost_usd: Option<f64>,
 }
 
 #[cfg(test)]
@@ -156,12 +171,13 @@ mod tests {
             "duration_ms": 5000,
             "duration_api_ms": 4500,
             "num_turns": 3,
+            "stop_reason": "end_turn",
             "modelUsage": {
                 "claude-opus-4": {
-                    "input_tokens": 1000,
-                    "output_tokens": 500,
-                    "cache_read_tokens": 100,
-                    "cache_write_tokens": 50
+                    "inputTokens": 1000,
+                    "outputTokens": 500,
+                    "cacheReadInputTokens": 100,
+                    "cacheCreationInputTokens": 50
                 }
             }
         }"#;
@@ -173,15 +189,42 @@ mod tests {
                 assert_eq!(r.duration_ms, Some(5000));
                 assert_eq!(r.duration_api_ms, Some(4500));
                 assert_eq!(r.num_turns, Some(3));
+                assert_eq!(r.stop_reason, Some("end_turn".to_string()));
                 let usage = r.model_usage.as_ref().unwrap();
                 let u = &usage["claude-opus-4"];
                 assert_eq!(u.input_tokens, Some(1000));
                 assert_eq!(u.output_tokens, Some(500));
-                assert_eq!(u.cache_read_tokens, Some(100));
-                assert_eq!(u.cache_write_tokens, Some(50));
+                assert_eq!(u.cache_read_input_tokens, Some(100));
+                assert_eq!(u.cache_creation_input_tokens, Some(50));
             }
             other => panic!("Expected Result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn deserialize_model_usage_camelcase_real() {
+        // Exact camelCase shape emitted by the claude CLI envelope (verified
+        // against a live run). Before the serde renames every field here
+        // deserialized to None, which is why usage reached callers as 0.
+        // Unknown extras (contextWindow, maxOutputTokens) are ignored.
+        let json = r#"{
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 452,
+                "outputTokens": 109,
+                "cacheReadInputTokens": 17283,
+                "cacheCreationInputTokens": 7922,
+                "costUSD": 0.0126278,
+                "contextWindow": 200000,
+                "maxOutputTokens": 32000
+            }
+        }"#;
+        let mu: HashMap<String, ModelUsage> = serde_json::from_str(json).unwrap();
+        let u = &mu["claude-haiku-4-5-20251001"];
+        assert_eq!(u.input_tokens, Some(452));
+        assert_eq!(u.output_tokens, Some(109));
+        assert_eq!(u.cache_read_input_tokens, Some(17283));
+        assert_eq!(u.cache_creation_input_tokens, Some(7922));
+        assert_eq!(u.cost_usd, Some(0.0126278));
     }
 
     #[test]
@@ -204,8 +247,8 @@ mod tests {
             "type": "result",
             "result": "ok",
             "modelUsage": {
-                "claude-opus-4": {"input_tokens": 100, "output_tokens": 50},
-                "claude-sonnet-4": {"input_tokens": 200, "output_tokens": 100}
+                "claude-opus-4": {"inputTokens": 100, "outputTokens": 50},
+                "claude-sonnet-4": {"inputTokens": 200, "outputTokens": 100}
             }
         }"#;
         let msg: ClaudeCliMessage = serde_json::from_str(json).unwrap();

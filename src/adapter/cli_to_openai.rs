@@ -158,6 +158,7 @@ mod tests {
             duration_ms: Some(1000),
             duration_api_ms: Some(800),
             num_turns: Some(1),
+            stop_reason: None,
             model_usage: None,
         };
         let resp = cli_result_to_openai(&result, "abc123");
@@ -178,8 +179,9 @@ mod tests {
             ModelUsage {
                 input_tokens: Some(100),
                 output_tokens: Some(50),
-                cache_read_tokens: Some(10),
-                cache_write_tokens: Some(5),
+                cache_read_input_tokens: Some(10),
+                cache_creation_input_tokens: Some(5),
+                cost_usd: Some(0.01),
             },
         );
         let result = ResultMessage {
@@ -188,6 +190,7 @@ mod tests {
             duration_ms: None,
             duration_api_ms: None,
             num_turns: None,
+            stop_reason: None,
             model_usage: Some(usage),
         };
         let resp = cli_result_to_openai(&result, "xyz");
@@ -206,6 +209,7 @@ mod tests {
             duration_ms: None,
             duration_api_ms: None,
             num_turns: None,
+            stop_reason: None,
             model_usage: None,
         };
         let resp = cli_result_to_openai(&result, "id");

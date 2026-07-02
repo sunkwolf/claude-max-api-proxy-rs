@@ -44,8 +44,9 @@ fn messages_to_prompt(system: Option<&ContentInput>, messages: &[crate::types::a
 }
 
 /// Convert an Anthropic MessagesRequest to CLI arguments.
-/// Returns (model_alias, prompt, optional_session_id).
-pub fn anthropic_to_cli(request: &MessagesRequest) -> (&'static str, String, Option<String>) {
+/// Returns (model, prompt, optional_session_id). `model` is either a short alias
+/// or a verbatim full id (see `extract_model`).
+pub fn anthropic_to_cli(request: &MessagesRequest) -> (String, String, Option<String>) {
     let model = extract_model(&request.model);
     let prompt = messages_to_prompt(request.system.as_ref(), &request.messages);
     let session_id = request
@@ -178,7 +179,8 @@ mod tests {
             }),
         };
         let (model, prompt, session_id) = anthropic_to_cli(&request);
-        assert_eq!(model, "sonnet");
+        // Fully-qualified id → forwarded verbatim (no longer degraded to "sonnet").
+        assert_eq!(model, "claude-sonnet-4-5-20250929");
         assert!(prompt.contains("<system>"));
         assert!(prompt.contains("test"));
         assert_eq!(session_id, Some("user-42".to_string()));

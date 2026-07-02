@@ -16,34 +16,29 @@ fn model_map() -> HashMap<&'static str, &'static str> {
     ])
 }
 
-/// Extract the CLI model alias from an OpenAI model name.
-/// Defaults to "opus" for unrecognized models.
-pub fn extract_model(model: &str) -> &'static str {
+/// Resolve the model string to pass to the `--model` flag of the CLI.
+///
+/// Known short aliases and the `claude-code-cli/` prefix are mapped to the CLI's
+/// short names. Anything else is passed through **verbatim**: the CLI accepts
+/// full ids such as `claude-sonnet-4-6-20250929` and `claude-opus-4-8[1m]`, and
+/// substring-degrading them to `opus`/`sonnet`/`haiku` (the old behavior) dropped
+/// the exact snapshot and the `[1m]` context-window suffix.
+pub fn extract_model(model: &str) -> String {
     let map = model_map();
 
     if let Some(&alias) = map.get(model) {
-        return alias;
+        return alias.to_string();
     }
 
     // Try stripping "claude-code-cli/" prefix
     if let Some(stripped) = model.strip_prefix("claude-code-cli/") {
         if let Some(&alias) = map.get(stripped) {
-            return alias;
+            return alias.to_string();
         }
     }
 
-    // Substring fallback for date-suffixed model IDs (e.g. "claude-opus-4-20250514")
-    if model.contains("opus") {
-        return "opus";
-    }
-    if model.contains("sonnet") {
-        return "sonnet";
-    }
-    if model.contains("haiku") {
-        return "haiku";
-    }
-
-    "opus"
+    // Unknown / fully-qualified id → pass through unchanged.
+    model.to_string()
 }
 
 /// Extract text from MessageContent
@@ -92,12 +87,12 @@ pub fn messages_to_prompt(messages: &[Message]) -> String {
 
 /// Convert an OpenAI request to CLI arguments and prompt.
 /// Returns (model_alias, prompt, optional_session_id).
-pub fn openai_to_cli(request: &ChatCompletionRequest) -> (&'static str, String, Option<String>) {
+pub fn openai_to_cli(request: &ChatCompletionRequest) -> (String, String, Option<String>) {
     let model = request
         .model
         .as_deref()
         .map(extract_model)
-        .unwrap_or("opus");
+        .unwrap_or_else(|| "opus".to_string());
 
     let prompt = request
         .messages
@@ -139,17 +134,38 @@ mod tests {
     }
 
     #[test]
-    fn date_suffixed_model_names() {
-        assert_eq!(extract_model("claude-opus-4-20250514"), "opus");
-        assert_eq!(extract_model("claude-sonnet-4-5-20250929"), "sonnet");
-        assert_eq!(extract_model("claude-haiku-4-5-20251001"), "haiku");
+    fn date_suffixed_model_names_pass_through_verbatim() {
+        // Fully-qualified ids are not in the alias map → forwarded verbatim to
+        // the CLI (which accepts them). Previously these degraded to short aliases.
+        assert_eq!(
+            extract_model("claude-opus-4-20250514"),
+            "claude-opus-4-20250514"
+        );
+        assert_eq!(
+            extract_model("claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5-20250929"
+        );
+        assert_eq!(
+            extract_model("claude-haiku-4-5-20251001"),
+            "claude-haiku-4-5-20251001"
+        );
     }
 
     #[test]
-    fn unknown_model_defaults_to_opus() {
-        assert_eq!(extract_model("gpt-4"), "opus");
-        assert_eq!(extract_model("unknown-model"), "opus");
-        assert_eq!(extract_model(""), "opus");
+    fn full_ids_pass_through_verbatim() {
+        // The 1M-context suffix and exact snapshots must survive untouched.
+        assert_eq!(extract_model("claude-opus-4-8[1m]"), "claude-opus-4-8[1m]");
+        assert_eq!(
+            extract_model("claude-sonnet-4-6-20250929"),
+            "claude-sonnet-4-6-20250929"
+        );
+    }
+
+    #[test]
+    fn unknown_model_passes_through_verbatim() {
+        assert_eq!(extract_model("gpt-4"), "gpt-4");
+        assert_eq!(extract_model("unknown-model"), "unknown-model");
+        assert_eq!(extract_model(""), "");
     }
 
     // ── messages_to_prompt ────────────────────────────────────

@@ -396,6 +396,12 @@ async fn handle_messages_non_streaming(
     }
 }
 
+/// NOTE: the streaming path does NOT report faithful usage. `message_start`
+/// emits zeroed usage, `message_delta` carries only summed output tokens, and
+/// stop_reason / num_turns are not propagated (unlike the non-streaming path,
+/// which reads them from the CLI result). Yomi consumes the non-streaming
+/// `/v1/messages` route, so this is intentionally left as-is; wiring usage into
+/// the SSE events would require buffering the result before the final events.
 async fn handle_messages_streaming(
     request_id: String,
     prompt: String,

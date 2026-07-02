@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn process_line_result() {
-        let line = r#"{"type":"result","result":"Done","exitCode":0,"duration_ms":1234,"duration_api_ms":1000,"num_turns":1,"modelUsage":{"claude-opus-4":{"input_tokens":50,"output_tokens":25}}}"#;
+        let line = r#"{"type":"result","result":"Done","exitCode":0,"duration_ms":1234,"duration_api_ms":1000,"num_turns":1,"modelUsage":{"claude-opus-4":{"inputTokens":50,"outputTokens":25}}}"#;
         let events = process_line(line).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
